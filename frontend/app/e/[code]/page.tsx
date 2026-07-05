@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import SelfieCapture from "@/components/SelfieCapture";
+import FaceScanOverlay from "@/components/FaceScanOverlay";
 import { api, Match, SearchResponse } from "@/lib/api";
 
 export default function GuestGallery({ params }: { params: { code: string } }) {
@@ -11,13 +12,35 @@ export default function GuestGallery({ params }: { params: { code: string } }) {
   const [camera, setCamera] = useState(false);
   const [results, setResults] = useState<SearchResponse | null>(null);
   const [decided, setDecided] = useState<Record<string, boolean>>({});
+  const [scanning, setScanning] = useState(false);
+  const animDoneRef = useRef(false);
+  const pendingResultRef = useRef<SearchResponse | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const event = useQuery({ queryKey: ["event", code], queryFn: () => api.eventByCode(code) });
 
+  const finishScan = () => {
+    setScanning(false);
+    if (pendingResultRef.current) {
+      setResults(pendingResultRef.current);
+      setDecided({});
+      setCamera(false);
+      pendingResultRef.current = null;
+    }
+  };
+
   const search = useMutation({
     mutationFn: (blob: Blob) => api.search(event.data!.id, blob),
-    onSuccess: (data) => { setResults(data); setDecided({}); setCamera(false); },
+    onMutate: () => {
+      animDoneRef.current = false;
+      pendingResultRef.current = null;
+      setScanning(true);
+    },
+    onSuccess: (data) => {
+      pendingResultRef.current = data;
+      if (animDoneRef.current) finishScan();
+    },
+    onError: () => setScanning(false),
   });
 
   const feedback = useMutation({
@@ -55,7 +78,17 @@ export default function GuestGallery({ params }: { params: { code: string } }) {
           <h1 className="text-2xl font-black sm:text-3xl">Find your photos</h1>
           <p className="mt-2 font-medium">One selfie is all it takes. Only you in the frame, good light.</p>
 
-          {camera ? (
+          {scanning ? (
+            <div className="mt-5">
+              <FaceScanOverlay
+                label="Searching every face at the event"
+                onDone={() => {
+                  animDoneRef.current = true;
+                  if (!search.isPending) finishScan();
+                }}
+              />
+            </div>
+          ) : camera ? (
             <div className="mt-5"><SelfieCapture onCapture={(b) => search.mutate(b)} onCancel={() => setCamera(false)} /></div>
           ) : (
             <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
@@ -68,9 +101,6 @@ export default function GuestGallery({ params }: { params: { code: string } }) {
             </div>
           )}
 
-          {search.isPending && (
-            <p className="mt-5 animate-pulse text-lg font-black">Searching every face at the event…</p>
-          )}
           {search.isError && (
             <p className="mt-5 border-brutal border-ink bg-coral p-3 font-bold">{(search.error as Error).message}</p>
           )}
