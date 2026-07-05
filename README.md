@@ -7,34 +7,49 @@ Organizers bulk-upload event photos; every face is detected (SCRFD via InsightFa
 ## Architecture
 
 ```
-frontend (Next.js 14) ──► api (FastAPI) ──► Postgres   (metadata, searches, feedback)
-                              │        ──► Qdrant     (face embeddings, per-event filter)
-                              │        ──► MinIO      (originals, thumbs, face crops, selfies)
-                              └──► Redis ──► worker (Celery: blur gate → pHash dedupe →
-                                             detect → embed → index → thumbnail → cluster)
+frontend (Next.js 14) ──► api (FastAPI) ──► Postgres (Supabase)  (metadata, searches, feedback)
+                              │        ──► Qdrant Cloud          (face embeddings, per-event filter)
+                              │        ──► Supabase Storage      (originals, thumbs, face crops, selfies)
+                              └──► indexing runs inline as a FastAPI BackgroundTask
+                                   (blur gate → pHash dedupe → detect → embed → index → thumbnail → cluster)
 ```
+
+No Docker, no self-hosted database — everything runs against free managed cloud services plus your local Python/Node processes.
 
 ## Quick start
 
-```bash
-# 1. Config
-cp .env.example .env
+1. **Create the free cloud services** (one-time):
+   - [Supabase](https://supabase.com) → new project → grab the Project URL, `service_role` key (Settings → API), and the Postgres connection string (Settings → Database)
+   - In Supabase → Storage, create a public bucket named `grabpic`
+   - [Qdrant Cloud](https://cloud.qdrant.io) → create a free cluster → grab the Cluster URL and an API key
 
-# 2. Infra + API + worker (first run downloads the InsightFace model, ~300 MB)
-docker compose up --build
+2. **Configure**
+   ```bash
+   cp .env.example .env
+   # fill in DATABASE_URL, SYNC_DATABASE_URL, QDRANT_URL, QDRANT_API_KEY,
+   # SUPABASE_URL, SUPABASE_SERVICE_KEY
+   ```
 
-# 3. Frontend (separate terminal)
-cd frontend
-npm install
-NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
-```
+3. **Backend**
+   ```bash
+   cd backend
+   python3 -m venv venv && source venv/bin/activate
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload
+   ```
+   First run downloads the InsightFace model (~300 MB).
+
+4. **Frontend** (separate terminal)
+   ```bash
+   cd frontend
+   npm install
+   NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+   ```
 
 - API + Swagger UI: http://localhost:8000/docs
 - Frontend: http://localhost:3000
-- MinIO console: http://localhost:9001 (grabpic / grabpic-secret)
-- Qdrant dashboard: http://localhost:6333/dashboard
 
-Tables are created automatically on API startup (SQLAlchemy `create_all`) — no separate migration step for now. If you change models during development, `docker compose down -v` resets everything.
+Tables are created automatically on API startup (SQLAlchemy `create_all`) — no separate migration step for now.
 
 ## Seed a test event (no frontend needed)
 
@@ -45,7 +60,7 @@ Everything is testable from Swagger UI at `/docs`, or with curl:
 curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
   -d '{"name": "Test wedding", "date": "2026-08-14"}'
 
-# Bulk upload photos (returns 202; indexing happens in the Celery worker)
+# Bulk upload photos (returns 202; indexing runs in the background)
 curl -X POST "localhost:8000/events/<EVENT_ID>/photos" \
   -F "files=@photo1.jpg" -F "files=@photo2.jpg"
 
@@ -69,23 +84,22 @@ open http://localhost:3000/e/<GUEST_CODE>
 
 ## Pipeline details
 
-Each uploaded photo goes through the Celery worker:
+Each uploaded photo goes through, inline as a background task:
 1. **Blur gate** — Laplacian variance below `BLUR_THRESHOLD` → skipped.
 2. **Duplicate gate** — pHash within `PHASH_DISTANCE` of an already-indexed photo in the same event → skipped.
 3. **EXIF** — capture time and camera extracted for the timeline; GPS is never read.
-4. **Detect + embed** — every face gets a bounding box, a cropped face chip in MinIO, and a 512-dim embedding in Qdrant.
+4. **Detect + embed** — every face gets a bounding box, a cropped face chip in Supabase Storage, and a 512-dim embedding in Qdrant.
 5. **Thumbnail** — 640px JPEG for fast galleries.
 
-Failures retry 3× with backoff; exhausted retries land in a `failed` state visible on the dashboard with a one-click requeue (`POST /events/{id}/reprocess`). `POST /events/{id}/cluster` groups all faces into unique people for the "N unique people found" stat.
+Failed photos land in a `failed` state visible on the dashboard with a one-click requeue (`POST /events/{id}/reprocess`). `POST /events/{id}/cluster` groups all faces into unique people for the "N unique people found" stat.
 
 ## Repo layout
 
 ```
 backend/
   app/            FastAPI app (routers, models, schemas, services)
-  worker/         Celery app + indexing/clustering tasks
+  worker/         indexing/clustering task functions, run via BackgroundTasks
 frontend/
   app/            Next.js App Router pages (landing, organizer, guest gallery)
-  components/     SelfieCapture (getUserMedia) etc.
-docker-compose.yml
+  components/     SelfieCapture (getUserMedia), FaceScanOverlay (scan animation)
 ```

@@ -1,51 +1,50 @@
-import io
-from datetime import timedelta
 from functools import lru_cache
 
-from minio import Minio
+import httpx
 
 from .config import get_settings
 
 
 @lru_cache
-def _client(public: bool = False) -> Minio:
+def _client() -> httpx.Client:
     s = get_settings()
-    endpoint = s.minio_public_endpoint if public else s.minio_endpoint
-    return Minio(
-        endpoint,
-        access_key=s.minio_access_key,
-        secret_key=s.minio_secret_key,
-        secure=s.minio_secure,
+    return httpx.Client(
+        base_url=f"{s.supabase_url}/storage/v1",
+        headers={
+            "Authorization": f"Bearer {s.supabase_service_key}",
+            "apikey": s.supabase_service_key,
+        },
+        timeout=30.0,
     )
 
 
 def ensure_bucket() -> None:
     s = get_settings()
     c = _client()
-    if not c.bucket_exists(s.minio_bucket):
-        c.make_bucket(s.minio_bucket)
+    resp = c.get(f"/bucket/{s.supabase_bucket}")
+    if resp.status_code == 200:
+        return
+    c.post("/bucket", json={"id": s.supabase_bucket, "name": s.supabase_bucket, "public": True})
 
 
 def put_bytes(key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
     s = get_settings()
-    _client().put_object(
-        s.minio_bucket, key, io.BytesIO(data), length=len(data), content_type=content_type
+    resp = _client().post(
+        f"/object/{s.supabase_bucket}/{key}",
+        content=data,
+        headers={"Content-Type": content_type, "x-upsert": "true"},
     )
+    resp.raise_for_status()
 
 
 def get_bytes(key: str) -> bytes:
     s = get_settings()
-    resp = _client().get_object(s.minio_bucket, key)
-    try:
-        return resp.read()
-    finally:
-        resp.close()
-        resp.release_conn()
+    resp = _client().get(f"/object/{s.supabase_bucket}/{key}")
+    resp.raise_for_status()
+    return resp.content
 
 
 def presigned_url(key: str, expires_minutes: int = 60) -> str:
+    # Bucket is public, so a plain public URL works without signing.
     s = get_settings()
-    # Sign with the public endpoint so browsers outside the compose network can use it.
-    return _client(public=True).presigned_get_object(
-        s.minio_bucket, key, expires=timedelta(minutes=expires_minutes)
-    )
+    return f"{s.supabase_url}/storage/v1/object/public/{s.supabase_bucket}/{key}"

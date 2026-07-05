@@ -4,17 +4,15 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://grabpic:grabpic@localhost:5432/grabpic"
-    sync_database_url: str = "postgresql+psycopg2://grabpic:grabpic@localhost:5432/grabpic"
-    redis_url: str = "redis://localhost:6379/0"
-    qdrant_url: str = "http://localhost:6333"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres"
+    sync_database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/postgres"
 
-    minio_endpoint: str = "localhost:9000"
-    minio_public_endpoint: str = "localhost:9000"
-    minio_access_key: str = "grabpic"
-    minio_secret_key: str = "grabpic-secret"
-    minio_bucket: str = "grabpic"
-    minio_secure: bool = False
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
+
+    supabase_url: str = ""
+    supabase_service_key: str = ""
+    supabase_bucket: str = "grabpic"
 
     confident_threshold: float = 0.5
     borderline_threshold: float = 0.35

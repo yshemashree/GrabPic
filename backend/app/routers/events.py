@@ -2,7 +2,7 @@ import secrets
 import string
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,9 +64,10 @@ async def get_event(event_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def upload_photos(
     event_id: uuid.UUID,
     files: list[UploadFile],
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Store originals in MinIO immediately, queue indexing, return 202."""
+    """Store originals in Supabase Storage immediately, queue indexing, return 202."""
     from worker.tasks import process_photo
 
     event = await _get_event(event_id, db)
@@ -98,7 +99,7 @@ async def upload_photos(
 
     await db.commit()
     for pid in accepted_ids:
-        process_photo.delay(str(pid))
+        background_tasks.add_task(process_photo, str(pid))
     log.info("photos_uploaded", event_id=str(event_id), accepted=len(accepted_ids), rejected=len(rejected))
     return UploadAccepted(accepted=len(accepted_ids), rejected=rejected, photo_ids=accepted_ids)
 
@@ -158,7 +159,9 @@ async def list_photos(event_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{event_id}/reprocess", status_code=202)
-async def reprocess_failed(event_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def reprocess_failed(
+    event_id: uuid.UUID, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)
+):
     """Requeue every failed photo (dead-letter recovery)."""
     from worker.tasks import process_photo
 
@@ -168,14 +171,16 @@ async def reprocess_failed(event_id: uuid.UUID, db: AsyncSession = Depends(get_d
     )
     ids = [str(i) for i in rows.scalars()]
     for pid in ids:
-        process_photo.delay(pid)
+        background_tasks.add_task(process_photo, pid)
     return {"requeued": len(ids)}
 
 
 @router.post("/{event_id}/cluster", status_code=202)
-async def trigger_clustering(event_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def trigger_clustering(
+    event_id: uuid.UUID, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)
+):
     from worker.tasks import cluster_event
 
     await _get_event(event_id, db)
-    cluster_event.delay(str(event_id))
+    background_tasks.add_task(cluster_event, str(event_id))
     return {"queued": True}

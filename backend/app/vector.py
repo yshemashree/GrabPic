@@ -11,7 +11,8 @@ DIM = 512
 
 @lru_cache
 def client() -> QdrantClient:
-    return QdrantClient(url=get_settings().qdrant_url)
+    s = get_settings()
+    return QdrantClient(url=s.qdrant_url, api_key=s.qdrant_api_key or None)
 
 
 def ensure_collection() -> None:

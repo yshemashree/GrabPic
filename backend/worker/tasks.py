@@ -1,11 +1,12 @@
-"""Celery tasks: photo indexing pipeline + per-event face clustering.
+"""Photo indexing pipeline + per-event face clustering.
 
 Pipeline per photo:
   quality gate (blur) -> near-duplicate gate (pHash) -> face detection ->
   embeddings -> Qdrant upsert -> thumbnails/crops -> Postgres metadata.
 
-Tasks are idempotent: re-running a photo re-derives everything and upserts,
-so retries after a crash never corrupt state.
+Runs as a FastAPI BackgroundTask (no queue/broker needed at this scale).
+Idempotent: re-running a photo re-derives everything and upserts, so a
+crash mid-processing never corrupts state — just call again.
 """
 from datetime import datetime
 
@@ -16,21 +17,13 @@ from app.config import get_settings
 from app.logging_conf import get_logger
 from app.models import Face, Photo, PhotoStatus
 from app.services import clustering, faces, quality
-from worker.celery_app import celery_app
 from worker.db_sync import SyncSession
 
 log = get_logger("worker")
 settings = get_settings()
 
 
-@celery_app.task(
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=5,
-    retry_backoff_max=120,
-    max_retries=3,
-)
-def process_photo(self, photo_id: str) -> str:
+def process_photo(photo_id: str) -> str:
     with SyncSession() as db:
         photo = db.get(Photo, photo_id)
         if photo is None:
@@ -121,16 +114,13 @@ def process_photo(self, photo_id: str) -> str:
             photo = db.get(Photo, photo_id)
             if photo is not None:
                 photo.error = str(exc)[:2000]
-                # Mark failed only when retries are exhausted (dead-letter state)
-                if self.request.retries >= self.max_retries:
-                    photo.status = PhotoStatus.failed
-                    photo.processed_at = datetime.utcnow()
+                photo.status = PhotoStatus.failed
+                photo.processed_at = datetime.utcnow()
                 db.commit()
-            log.error("photo_failed", photo_id=photo_id, error=str(exc), retry=self.request.retries)
-            raise
+            log.error("photo_failed", photo_id=photo_id, error=str(exc))
+            return "failed"
 
 
-@celery_app.task
 def cluster_event(event_id: str) -> int:
     """Re-cluster all faces of an event so the dashboard can show unique-people count."""
     points = vector.all_event_faces(event_id)
