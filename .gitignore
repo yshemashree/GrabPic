@@ -18,6 +18,7 @@ build/
 .next/
 next-env.d.ts
 *.egg-info/
+*.tsbuildinfo
 
 # OS files
 .DS_Store
