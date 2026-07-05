@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background: theme("colors.paper");
+  color: theme("colors.ink");
+}
+
+@layer components {
+  .card {
+    @apply border-brutal border-ink bg-white shadow-brutal rounded-none;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 border-brutal border-ink rounded-none
+      px-5 py-3 font-bold shadow-brutal transition-all duration-100 select-none cursor-pointer
+      active:translate-x-[6px] active:translate-y-[6px] active:shadow-none
+      disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .tag {
+    @apply inline-block border-brutal border-ink rounded-none px-2 py-0.5 text-sm font-bold shadow-brutal-sm;
+  }
+  .input {
+    @apply w-full border-brutal border-ink rounded-none bg-white px-4 py-3 font-medium
+      shadow-brutal-sm focus:outline-none focus:shadow-brutal;
+  }
+}
